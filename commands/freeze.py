@@ -35,9 +35,10 @@ def main(argv: list[str]) -> int:
     city_root = ui.find_city_root()
     handle = args.name
 
-    m = manifest.read(city_root / "imports.toml")
+    city_toml_path = city_root / "city.toml"
+    m = manifest.read(city_toml_path)
     if handle not in m.imports:
-        ui.die(f"no import named {handle!r} in imports.toml")
+        ui.die(f"no import named {handle!r} in [imports] in city.toml")
 
     spec = m.imports[handle]
     target = city_root / "packs" / handle
@@ -58,7 +59,7 @@ def main(argv: list[str]) -> int:
         # be updated to point at ./packs/<handle> for the loader to find it.
         # Strategy: rewrite the manifest entry to point at the frozen location.
         spec.path = f"./packs/{handle}"
-        manifest.write(m, city_root / "imports.toml")
+        manifest.write(m, city_toml_path)
         # Also append to city.toml's includes if not already present
         city_data = citytoml.read(city_root / "city.toml")
         existing_includes = citytoml.get_includes(city_data)
@@ -75,7 +76,7 @@ def main(argv: list[str]) -> int:
             new_packs={},
             removed_packs=set(),
         )
-        ui.info(f"Frozen. To unfreeze, rm -rf ./packs/{handle}/ and edit imports.toml.")
+        ui.info(f"Frozen. To unfreeze, rm -rf ./packs/{handle}/ and edit [imports.{handle}] in city.toml.")
         return 0
 
     # URL import — the canonical case

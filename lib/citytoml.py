@@ -1,20 +1,31 @@
 """Surgical edits to city.toml.
 
 The city.toml file is partly user-managed (e.g. [beads], [workspace].name)
-and partly machine-managed (the [packs.X] entries that gc import writes,
-plus the entries it adds to [workspace].includes).
+and partly managed by gc import. Three sections in city.toml are managed
+by this module:
+
+  - [imports.X]                 — user-facing direct imports + constraints.
+                                   Users CAN edit this section by hand;
+                                   gc import re-emits it on add/remove/upgrade.
+  - [packs.X]                   — machine-managed view of the resolved
+                                   transitive closure for the v1 loader.
+                                   Don't edit by hand.
+  - [workspace].includes        — machine-managed list for the v1 loader.
+                                   Don't edit by hand.
 
 We can't use a full TOML rewriter because that would lose user formatting,
-comments, and section ordering. Instead we do targeted text edits:
+comments, and section ordering for the parts of city.toml that gc import
+DOESN'T own. Instead we do targeted text edits:
 
   - Read the file as text.
   - Use tomllib to validate and find what's there.
-  - For [packs.X] blocks: find the exact line range and replace/insert/delete.
+  - For [imports.X] / [packs.X] blocks: find the exact line range and
+    replace/insert/delete.
   - For includes: find the [workspace].includes line and rewrite the array.
 
 This is more brittle than a TOML rewriter but works for the small set of
 operations we need. We never touch any line that doesn't belong to a
-machine-managed construct.
+managed construct.
 """
 
 import re
@@ -183,3 +194,130 @@ def _format_packs_block(block: PacksBlock) -> str:
     if block.path:
         lines.append(f'path = "{block.path}"')
     return "\n".join(lines)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# [imports.X] section management
+# ─────────────────────────────────────────────────────────────────────
+
+
+def update_imports(path: Path, imports: dict) -> None:
+    """Rewrite the [imports.X] section of city.toml in place.
+
+    `imports` is a dict mapping handle → ImportSpec (from lib.manifest).
+    The full set replaces whatever was there before — any [imports.X]
+    block not in the new dict is deleted.
+
+    Creates city.toml if it doesn't exist (with just an [imports] section).
+    """
+    if path.exists():
+        text = path.read_text()
+    else:
+        text = ""
+
+    # Find every existing [imports.X] block and remove it
+    existing_handles = _find_imports_handles(text)
+    text = _delete_imports_blocks(text, existing_handles)
+
+    # Insert the new blocks
+    text = _insert_imports_blocks(text, imports)
+
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def _find_imports_handles(text: str) -> set[str]:
+    """Walk text, find every `[imports.X]` header line, return the set of X."""
+    out = set()
+    for line in text.splitlines():
+        m = re.match(r"^\s*\[imports\.([A-Za-z0-9_-]+)\]\s*$", line)
+        if m:
+            out.add(m.group(1))
+    return out
+
+
+def _delete_imports_blocks(text: str, names: set[str]) -> str:
+    """Remove `[imports.<name>]` blocks for every name in `names`.
+
+    Same shape as _delete_packs_blocks: only removes the header and
+    immediately-following key=value lines, then one trailing blank line.
+    Comments and other section headers terminate the block.
+    """
+    if not names:
+        return text
+    lines = text.splitlines(keepends=True)
+    out = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = re.match(r"^\s*\[imports\.([A-Za-z0-9_-]+)\]\s*$", line)
+        if m and m.group(1) in names:
+            i += 1
+            while i < len(lines) and re.match(r"^\s*[A-Za-z_][A-Za-z0-9_]*\s*=", lines[i]):
+                i += 1
+            if i < len(lines) and lines[i].strip() == "":
+                i += 1
+            continue
+        out.append(line)
+        i += 1
+    return "".join(out)
+
+
+def _insert_imports_blocks(text: str, imports: dict) -> str:
+    """Insert all the new [imports.X] blocks into text.
+
+    The blocks are placed:
+      - After any existing [imports.X] blocks (if any survive)
+      - Otherwise, before the first [packs.X] block (if any)
+      - Otherwise, at the end of the file
+
+    Imports are sorted by handle for stable output.
+    """
+    if not imports:
+        return text
+
+    block_text = _format_imports_section(imports)
+
+    # Strategy: find a good insertion point
+    # 1. After the last [imports.*] block we wrote in the past (if there's a comment marker we can detect, etc.) — for v1 we just insert before the first [packs.*] header
+    # 2. If no [packs.*] section exists, insert at end of file (with proper spacing)
+    packs_match = re.search(r"^\s*\[packs\.", text, re.MULTILINE)
+    if packs_match:
+        insert_pos = packs_match.start()
+        prefix = text[:insert_pos]
+        # Normalize: trim any trailing blank lines from the prefix, then
+        # add exactly one blank line before the imports block, and one
+        # blank line after it before the [packs] block.
+        prefix_trimmed = prefix.rstrip("\n")
+        if prefix_trimmed:
+            return prefix_trimmed + "\n\n" + block_text + "\n\n" + text[insert_pos:]
+        else:
+            return block_text + "\n\n" + text[insert_pos:]
+    else:
+        # Append at end of file
+        if text == "":
+            return block_text + "\n"
+        if text.endswith("\n\n"):
+            return text + block_text + "\n"
+        elif text.endswith("\n"):
+            return text + "\n" + block_text + "\n"
+        else:
+            return text + "\n\n" + block_text + "\n"
+
+
+def _format_imports_section(imports: dict) -> str:
+    """Format a dict of handle → ImportSpec as a sequence of [imports.X] blocks."""
+    blocks = []
+    for handle in sorted(imports.keys()):
+        spec = imports[handle]
+        lines = [f"[imports.{handle}]"]
+        if spec.is_url():
+            lines.append(f'url = "{spec.url}"')
+            if spec.version:
+                lines.append(f'version = "{spec.version}"')
+        else:
+            lines.append(f'path = "{spec.path}"')
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)

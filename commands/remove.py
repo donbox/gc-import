@@ -4,7 +4,7 @@
 Usage:
     gc import remove <name>
 
-- Removes [imports.<name>] from imports.toml.
+- Removes [imports.<name>] from city.toml.
 - Garbage-collects transitive deps that are no longer needed.
 - Removes the corresponding [packs.X] blocks from city.toml and entries
   from [workspace].includes.
@@ -27,20 +27,20 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     city_root = ui.find_city_root()
+    city_toml_path = city_root / "city.toml"
     handle = args.name
 
-    manifest_path = city_root / "imports.toml"
-    m = manifest.read(manifest_path)
+    m = manifest.read(city_toml_path)
 
     if handle not in m.imports:
-        ui.die(f"no import named {handle!r} in imports.toml")
+        ui.die(f"no import named {handle!r} in [imports] in city.toml")
 
     spec = m.imports[handle]
     if spec.is_path():
         # Path imports just need to be dropped from the manifest — no lock entry, no cache
         del m.imports[handle]
-        manifest.write(m, manifest_path)
-        ui.info(f"Removed [imports.{handle}] (path import) from imports.toml")
+        manifest.write(m, city_toml_path)
+        ui.info(f"Removed [imports.{handle}] (path import) from city.toml")
         return 0
 
     # URL import — check freeze state
@@ -146,9 +146,9 @@ def main(argv: list[str]) -> int:
         removed_packs=to_remove,
     )
 
-    manifest.write(m, manifest_path)
+    manifest.write(m, city_toml_path)
 
-    ui.info(f"Removed [imports.{handle}] from imports.toml")
+    ui.info(f"Removed [imports.{handle}] from city.toml")
     if len(removed_from_lock) > 1:
         gc = sorted(set(removed_from_lock) - {handle})
         ui.info(f"Garbage-collected transitive deps: {', '.join(gc)}")

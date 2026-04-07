@@ -2,15 +2,19 @@
 """gc import add — add a pack to the city's imports.
 
 Usage:
-    gc import add <url|path> [--version <constraint>]
+    gc import add <url|path> [--version <constraint>] [--name <handle>]
 
 The argument shape selects the form:
   - URL (http://, https://, git@, ssh://) → fetch the repo, recurse into
     its [imports], write the full closure to pack.lock, materialize every
-    pack into .gc/cache/packs/, record the user's direct intent in
-    imports.toml, mirror the [packs] entries into city.toml.
-  - Path (/, ., ~ prefix) → write [imports.X] path = "..." to imports.toml.
-    No fetching, no lock entry, no recursion.
+    pack into .gc/cache/packs/, record the user's direct intent in the
+    [imports] section of city.toml, and mirror the [packs] entries into
+    city.toml as well.
+  - Path (/, ., ~ prefix) → write [imports.X] path = "..." to the [imports]
+    section of city.toml. No fetching, no lock entry, no recursion.
+
+--name lets the user override the default local handle when the default
+collides with an existing import.
 """
 
 import argparse
@@ -54,6 +58,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     city_root = ui.find_city_root()
+    city_toml_path = city_root / "city.toml"
     handle = args.name or _derive_local_handle(args.target)
 
     # Distinguish URL vs path
@@ -63,19 +68,22 @@ def main(argv: list[str]) -> int:
     if not is_url and not is_path:
         ui.die(f"argument {args.target!r} is neither a URL nor a path")
 
-    # Read existing manifest
-    manifest_path = city_root / "imports.toml"
-    m = manifest.read(manifest_path)
+    # Read existing manifest from city.toml [imports]
+    m = manifest.read(city_toml_path)
 
     if handle in m.imports:
-        ui.die(f"import {handle!r} already exists in imports.toml. Remove it first or use --name to alias.")
+        ui.die(
+            f"import {handle!r} already exists in [imports] in city.toml.\n"
+            f"  Remove it first with `gc import remove {handle}`,\n"
+            f"  or retry with --name <alias> to register this one under a different local handle."
+        )
 
     if is_path:
         # Path import — no fetching, no lock entry
         spec = manifest.ImportSpec(handle=handle, path=args.target)
         m.imports[handle] = spec
-        manifest.write(m, manifest_path)
-        ui.info(f"Added [imports.{handle}] path = \"{args.target}\" to imports.toml")
+        manifest.write(m, city_toml_path)
+        ui.info(f"Added [imports.{handle}] path = \"{args.target}\" to city.toml")
         return 0
 
     # URL import — full resolution and materialization
@@ -91,6 +99,12 @@ def main(argv: list[str]) -> int:
         closure = resolver.resolve(direct, accelerator)
     except resolver.ResolveError as e:
         ui.die(str(e))
+
+    # If the user didn't specify --version, the resolver picked a default
+    # constraint based on the latest tag (e.g. ^1.4 for v1.4.0). Persist
+    # that default back into the manifest spec so it shows up in city.toml.
+    if not args.version and handle in closure:
+        spec.version = closure[handle].constraint
 
     # Materialize every pack in the closure into the city cache
     pack_cache_root = cache.city_pack_cache(city_root)
@@ -185,11 +199,11 @@ def main(argv: list[str]) -> int:
         removed_packs=to_remove,
     )
 
-    # Write back the updated manifest
-    manifest.write(m, manifest_path)
+    # Write back the updated manifest into city.toml [imports]
+    manifest.write(m, city_toml_path)
 
-    ui.info(f"Added [imports.{handle}] to imports.toml")
-    ui.info(f"Updated city.toml ({len(new_packs)} packs in [packs], {len(new_includes)} entries in includes)")
+    ui.info(f"Added [imports.{handle}] to city.toml")
+    ui.info(f"Updated city.toml ([imports]: {len(m.imports)}, [packs]: {len(new_packs)}, includes: {len(new_includes)})")
     ui.info(f"Updated pack.lock ({len(lf.packs)} entries)")
     return 0
 

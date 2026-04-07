@@ -22,7 +22,7 @@ def main(argv: list[str]) -> int:
 
     city_root = ui.find_city_root()
     lf = lockfile.read(city_root / "pack.lock")
-    m = manifest.read(city_root / "imports.toml")
+    m = manifest.read(city_root / "city.toml")
 
     if not lf.packs and not m.imports:
         ui.info("No imports in this city.")

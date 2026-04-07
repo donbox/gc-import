@@ -1,6 +1,6 @@
 """Transitive resolution for gc import.
 
-Given a set of direct imports (from imports.toml), the resolver:
+Given a set of direct imports (from the [imports] section of city.toml), the resolver:
   1. Fetches each repo, finds the highest tag matching the constraint.
   2. Reads the resolved pack's pack.toml.
   3. Recurses into the pack's own [imports] block.

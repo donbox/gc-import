@@ -6,7 +6,7 @@ Usage:
 
 Reads pack.lock, fetches every entry from its recorded URL at the recorded
 commit, materializes each pack into .gc/cache/packs/, and verifies the
-content hash. Does NOT modify imports.toml, city.toml, or pack.lock.
+content hash. Does NOT modify city.toml or pack.lock.
 
 Frozen entries are skipped — they're already in ./packs/<name>/.
 """

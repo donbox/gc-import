@@ -5,8 +5,8 @@ Usage:
     gc import upgrade            # upgrade everything
     gc import upgrade <name>     # upgrade just one pack and its transitive deps
 
-The constraint in imports.toml is NOT modified — only the resolved version
-in pack.lock. Bumping a constraint requires editing imports.toml by hand.
+The constraint in [imports] in city.toml is NOT modified — only the resolved
+version in pack.lock. Bumping a constraint requires editing city.toml by hand.
 
 Frozen packs are skipped with a warning.
 """
@@ -26,14 +26,15 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     city_root = ui.find_city_root()
-    m = manifest.read(city_root / "imports.toml")
+    city_toml_path = city_root / "city.toml"
+    m = manifest.read(city_toml_path)
     if not m.imports:
         ui.info("No imports to upgrade.")
         return 0
 
     # If a specific name is requested, validate
     if args.name and args.name not in m.imports:
-        ui.die(f"no import named {args.name!r} in imports.toml")
+        ui.die(f"no import named {args.name!r} in [imports] in city.toml")
 
     lf = lockfile.read(city_root / "pack.lock")
     accelerator = cache.user_accelerator_root()

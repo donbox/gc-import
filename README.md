@@ -12,7 +12,7 @@ Resolving https://github.com/example/gastown...
     polecat → https://github.com/example/polecat
       Selected: 0.4.1 (constraint ^0.4)
   Materialized → .gc/cache/packs/gastown/, .gc/cache/packs/polecat/
-  Updated imports.toml, city.toml, pack.lock (2 entries)
+  Updated city.toml ([imports], [packs], includes) and pack.lock (2 entries)
 ```
 
 That's the whole experience. One command, full transitive resolution, ready to run.
@@ -84,7 +84,7 @@ Resolving https://github.com/example/gastown...
     polecat → https://github.com/example/polecat
       Selected: 0.4.1 (constraint ^0.4)
   Materialized → .gc/cache/packs/gastown/, .gc/cache/packs/polecat/
-  Updated imports.toml, city.toml, pack.lock (2 entries)
+  Updated city.toml ([imports], [packs], includes) and pack.lock (2 entries)
 
 # 3. See what you imported
 $ gc import list
@@ -92,8 +92,8 @@ NAME     VERSION  CONSTRAINT  URL
 gastown  1.4.0    ^1.4        https://github.com/example/gastown
 polecat  0.4.1    ^0.4        https://github.com/example/polecat ← gastown
 
-# 4. Commit imports.toml, pack.lock, and city.toml
-$ git add imports.toml pack.lock city.toml
+# 4. Commit city.toml and pack.lock
+$ git add city.toml pack.lock
 $ git commit -m "Add gastown"
 
 # 5. Your teammate clones the city and runs install
@@ -119,17 +119,18 @@ gc import add <url|path> [--version <constraint>] [--name <handle>]
 
 The argument shape selects the form:
 
-- **URL** (`http://`, `https://`, `git@`, `ssh://`): fetches the repo, picks the highest tag matching the constraint, recurses into the pack's `[imports]` and resolves them, materializes everything into `.gc/cache/packs/`, and writes to `imports.toml`, `city.toml`, and `pack.lock`.
+- **URL** (`http://`, `https://`, `git@`, `ssh://`): fetches the repo, picks the highest tag matching the constraint, recurses into the pack's `[imports]` and resolves them, materializes everything into `.gc/cache/packs/`, and writes to `city.toml` (the new `[imports]` section, plus the machine-managed `[packs]` and `[workspace].includes`) and `pack.lock`.
 - **Path** (`/`, `.`, `~` prefix): writes a `path =` import. No fetching, no lock entry, no recursion. The loader reads from the path directly.
 
 If `--version` is omitted, the constraint defaults to `^<major>.<minor>` of the latest available tag (compatible updates within the major version).
 
-If `--name` is omitted, the local handle is derived from the URL or path's last segment (`https://github.com/example/gastown` → `gastown`).
+If `--name` is omitted, the local handle is derived from the URL or path's last segment (`https://github.com/example/gastown` → `gastown`). If that handle already exists in the city's `[imports]`, `gc import add` errors and tells you to retry with `--name <alias>`. The resolver never auto-suffixes — when there's a collision, you pick the new name explicitly. (Same shape as `gc rig add` and `gc city register`.)
 
 ```
 $ gc import add https://github.com/example/gastown
 $ gc import add https://github.com/example/gastown --version "^1.5"
 $ gc import add https://github.com/example/gastown --name gastown_v1
+$ gc import add https://github.com/other-org/gastown --name other-gtwn  # alias to dodge a collision
 $ gc import add ../my-local-pack
 ```
 
@@ -145,7 +146,7 @@ Errors if the pack is currently frozen — run `rm -rf packs/<name>/` (or wait f
 
 ```
 $ gc import remove gastown
-Removed [imports.gastown] from imports.toml
+Removed [imports.gastown] from city.toml
 Garbage-collected transitive deps: polecat
 Updated city.toml, pack.lock
 ```
@@ -158,7 +159,7 @@ Restore the city to the exact state recorded in `pack.lock`. The cold-clone / CI
 gc import install
 ```
 
-Reads `pack.lock`, fetches each entry from its recorded URL at its recorded commit, materializes into `.gc/cache/packs/`, and verifies content hashes. Does **not** modify `imports.toml`, `city.toml`, or `pack.lock`. Pure restore.
+Reads `pack.lock`, fetches each entry from its recorded URL at its recorded commit, materializes into `.gc/cache/packs/`, and verifies content hashes. Does **not** modify `city.toml` or `pack.lock`. Pure restore.
 
 ```
 $ gc import install
@@ -171,14 +172,14 @@ Uses the hidden download accelerator (`~/.gc/cache/repos/`) so two cities pinnin
 
 ### `gc import upgrade`
 
-Re-resolve constraints in `imports.toml` against the latest available tags, pick higher versions where the constraint allows, and rewrite `pack.lock`.
+Re-resolve the constraints in `[imports]` (in `city.toml`) against the latest available tags, pick higher versions where the constraint allows, and rewrite `pack.lock`.
 
 ```
 gc import upgrade            # upgrade everything
 gc import upgrade <name>     # upgrade just one pack and its transitive descendants
 ```
 
-The constraint itself is **not** modified — only the resolved version. Bumping a constraint (e.g., `^1.2` → `^2.0`) requires editing `imports.toml` by hand and then running `gc import upgrade`.
+The constraint itself is **not** modified — only the resolved version. Bumping a constraint (e.g., `^1.2` → `^2.0`) requires editing the `[imports.<name>] version = "..."` line in `city.toml` by hand and then running `gc import upgrade`.
 
 ```
 $ gc import upgrade gastown
@@ -211,7 +212,9 @@ $ gc import list --tree
     └── polecat 0.4.1 (^0.4)  — https://github.com/example/polecat
 ```
 
-### `gc import freeze`
+### `gc import freeze` *(experimental)*
+
+> **⚠️ Experimental.** `gc import freeze` and the `./packs/` directory it writes into are experimental in v1 and may be removed before v1.0. The decision (keep, remove, or reframe in terms of the local registry) is pending a design discussion with Donna, Chris, and Julian. **Tracking issue:** TBD — to be filed against this repo once it's pushed to GitHub. Use freeze if you need it; expect the verb may go away or change shape.
 
 Snapshot the current resolution of an import into `./packs/<name>/`. Once frozen, the pack is committed to the city's git history and immune to upstream changes — sealed in amber.
 
@@ -241,17 +244,17 @@ Three things to keep in your head, and they have different jobs:
 
 | What | Where | Who edits it | Purpose |
 |---|---|---|---|
-| **`imports.toml`** | City root | The user (or `gc import add`/`remove`) | The city's *intent* — direct imports + version constraints |
+| **`[imports]` in `city.toml`** | City root | The user (or `gc import add`/`remove`) | The city's *intent* — direct imports + version constraints |
 | **`pack.lock`** | City root | `gc import` only — never by hand | The *exact* resolved transitive closure: every pack, its commit, its hash |
 | **`city.toml`** [packs] + includes | City root | `gc import` writes; user reads (and writes [beads] etc.) | What the gascity loader actually consumes |
 | **`.gc/cache/packs/`** | City root, gitignored | `gc import` only | Materialized pack directories the loader reads at startup |
 | **`~/.gc/cache/repos/`** | User home, hidden | `gc import` only | Shared download accelerator across all cities on this machine |
 
-The boundaries: **`imports.toml` is the user's intent**, **`pack.lock` is the truth**, the rest is derived. Commit `imports.toml`, `pack.lock`, and `city.toml`. Gitignore `.gc/`. The `~/.gc/` cache is your machine's business and never enters version control.
+The boundaries: **`[imports]` in `city.toml` is the user's intent**, **`pack.lock` is the truth**, the rest is derived. Commit `city.toml` and `pack.lock`. Gitignore `.gc/`. The `~/.gc/` cache is your machine's business and never enters version control.
 
 ### Local handles vs URLs
 
-When you write `[imports.gastown] url = "..."` in `imports.toml`, the word `gastown` is the **local handle** — the name this city uses for the pack internally. It becomes the directory name in `.gc/cache/packs/gastown/`, the namespace prefix for agents (`gastown.mayor`), and the includes-list entry in `city.toml`.
+When you write `[imports.gastown] url = "..."` in `city.toml`, the word `gastown` is the **local handle** — the name this city uses for the pack internally. It becomes the directory name in `.gc/cache/packs/gastown/`, the namespace prefix for agents (`gastown.mayor`), and the includes-list entry in `city.toml`.
 
 The URL is the pack's **global identity**. Two different URLs can have the same local handle in different cities (or even in the same city — see [side-by-side versions](#side-by-side-versions)). The handle is for *consumption*; the URL is for *resolution*.
 
@@ -276,9 +279,11 @@ If two transitive constraints on the same URL meet, the resolver:
 
 ### The `packs/` directory
 
-`./packs/` in a city has two roles, and they're distinguished by the `imports.toml` entry, not by directory structure:
+> **⚠️ Experimental:** Both `./packs/` and `gc import freeze` are experimental in v1. They may be removed before v1.0 — see [Vendoring with freeze](#vendoring-with-freeze) for the full caveat.
 
-- **Hand-authored sub-packs.** You created them with `mkdir packs/helper && edit pack.toml`, and you reference them via `[imports.helper] path = "./packs/helper"` in `imports.toml`. The package manager doesn't create or destroy these.
+`./packs/` in a city has two roles, and they're distinguished by the `[imports]` entry in `city.toml`, not by directory structure:
+
+- **Hand-authored sub-packs.** You created them with `mkdir packs/helper && edit pack.toml`, and you reference them via `[imports.helper] path = "./packs/helper"` in `city.toml`. The package manager doesn't create or destroy these.
 - **Frozen imports.** Created by `gc import freeze gastown` (copy a resolved pack into `./packs/gastown/`). The lock file remembers `frozen = true` plus the original URL/version/commit/hash.
 
 Both kinds coexist in the same directory with no conflict. They're committed to git either way.
@@ -303,7 +308,7 @@ Use freeze when:
 ```
 # You
 $ gc import add https://github.com/example/gastown
-$ git add imports.toml pack.lock city.toml
+$ git add city.toml pack.lock
 $ git commit -m "Add gastown"
 $ git push
 
@@ -323,7 +328,7 @@ $ git commit -m "Upgrade gastown 1.4.0 → 1.5.0"
 
 ### Bumping a constraint to a new major version
 
-The constraint isn't bumped automatically — that's a deliberate choice. Edit `imports.toml`:
+The constraint isn't bumped automatically — that's a deliberate choice. Edit `city.toml`:
 
 ```toml
 [imports.gastown]
@@ -364,7 +369,7 @@ $ gc import install        # repopulates .gc/cache/packs/gastown/ from the lock
 
 ```
 $ gc import remove gastown
-Removed [imports.gastown] from imports.toml
+Removed [imports.gastown] from city.toml
 Garbage-collected transitive deps: polecat
 Updated city.toml, pack.lock
 ```
@@ -411,7 +416,7 @@ Conflict: polecat is required at incompatible majors.
   - gastown wants polecat ^1.2 (would resolve 1.5.0)
   - maintenance wants polecat ^2.0 (would resolve 2.0.1)
 
-Add explicit imports to disambiguate. In imports.toml:
+Add explicit imports to disambiguate. In city.toml:
 
   [imports.polecat_v1]
   url = "https://github.com/example/polecat"
@@ -443,7 +448,7 @@ Both get fetched, both get cache directories at `.gc/cache/packs/gastown_v1/` an
 
 ### "no version of … matches constraint"
 
-Your constraint excludes every available tag. Check the constraint with `cat imports.toml`, run `git ls-remote --tags <url>` to see what's actually published, and either:
+Your constraint excludes every available tag. Check the constraint with `cat city.toml`, run `git ls-remote --tags <url>` to see what's actually published, and either:
 
 - Loosen the constraint (e.g., `^1.0` instead of `^1.5`).
 - Check that the upstream repo uses semver tags (`v1.2.3` or `1.2.3`, optionally prefixed for subpath URLs).
@@ -479,14 +484,14 @@ You tried to `remove`, `upgrade`, or re-`add` a pack that's been vendored into `
 
 ## v1 vs v2 schema
 
-`gc import` ships against the **v1 schema** today: `[packs]` and `[workspace].includes` in `city.toml`, with constraints in a sidecar `imports.toml` file. This works with the gascity loader as it exists right now — no Go changes required.
+`gc import` ships against the **v1 schema** today: `[imports]`, `[packs]`, and `[workspace].includes` all live inline in `city.toml`. The `[imports]` section is the user-facing surface; `[packs]` and `[workspace].includes` are machine-managed mirrors that the gascity loader reads. This works with the gascity loader as it exists right now — no Go changes required. (`[imports]` is a section the v1 loader doesn't recognize, so it's silently ignored by gascity until v2 lands.)
 
 The **v2 schema** is the long-term destination: a top-level `pack.toml` at the city root with `[imports]` blocks directly, no sidecar, no separate `[packs]` and `includes` constructs. The v2 schema needs three small additions to the gascity loader (read pack.toml at city root, recognize `[imports]` blocks, prefer `./packs/` over `.gc/cache/packs/`). When those land, `gc import` will gain a one-shot `gc import migrate` command that converts a v1 city to v2 mechanically.
 
 Until then, the user-visible mechanics are:
 
-- Edit `imports.toml` to express intent (or let `gc import add` write it).
-- Read `imports.toml` to see your direct imports and constraints.
+- Edit the `[imports]` section of `city.toml` to express intent (or let `gc import add` write it).
+- Read the `[imports]` section of `city.toml` to see your direct imports and constraints.
 - Read `pack.lock` to see the full transitive closure.
 - Treat `[packs]` and `[workspace].includes` in `city.toml` as machine-managed — `gc import` writes them; you don't.
 
@@ -540,7 +545,7 @@ The deletion logic only removes lines that look like `key = value` after a `[pac
 
 ### Stdlib only
 
-No `tomlkit`, no `tomli_w`, no `packaging`, no `gitpython`. The TOML reader is `tomllib` (stdlib in 3.11+); writers are hand-rolled because the package manager fully owns `pack.lock` and `imports.toml`. Git operations are subprocess calls.
+No `tomlkit`, no `tomli_w`, no `packaging`, no `gitpython`. The TOML reader is `tomllib` (stdlib in 3.11+); writers are hand-rolled because the package manager fully owns `pack.lock` and does surgical text edits to the `[imports]`, `[packs]`, and `[workspace].includes` sections of `city.toml`. Git operations are subprocess calls.
 
 The motivation: zero install friction. A user running `gc import add` for the first time should not need to `pip install` anything.
 
@@ -565,7 +570,7 @@ gc-import/
     ├── semver.py               # constraint parsing and matching
     ├── git.py                  # subprocess wrappers around git
     ├── lockfile.py             # pack.lock read/write
-    ├── manifest.py             # imports.toml read/write
+    ├── manifest.py             # [imports] section read from city.toml
     ├── citytoml.py             # surgical edits to city.toml
     ├── cache.py                # cache management
     ├── resolver.py             # transitive resolution
@@ -578,5 +583,7 @@ Same as Gas City. See `gascity/LICENSE` for details.
 
 ## See also
 
-- [doc-packman.md](https://github.com/donbox/gc-import/blob/main/docs/design.md) — the full design document, including the journey from the initial tap-based design through the no-tap rewrite to the current model.
+- [doc-packman.md](https://github.com/donbox/gc-import/blob/main/docs/design.md) — the full design document for `gc import`, including the journey from the initial tap-based design through the no-tap rewrite to the current model.
+- [doc-registry.md](https://github.com/donbox/gc-registry/blob/main/docs/design.md) — the companion design for `gc registry`, the local pack store + discovery surface that pairs with `gc import`. Discovery and curation live there; `gc import` stays focused on resolution and lock-file management.
+- [`gc-registry`](https://github.com/donbox/gc-registry) — the implementation of the registry commands, shipped as a separate Gas City pack.
 - [Gas City](https://github.com/gastownhall/gascity) — the main project.
