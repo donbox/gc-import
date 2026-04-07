@@ -1,0 +1,46 @@
+# gc-import — URL-based package manager for Gas City packs.
+#
+# Six verbs: add, remove, install, upgrade, list, freeze.
+# No tap concept, no user-level registry, no third-party Python deps.
+# See README.md for the user guide.
+
+[pack]
+name = "import"
+version = "0.1.0"
+schema = 1
+description = "URL-based package manager for Gas City packs (gc import add/remove/install/upgrade/list/freeze)"
+
+[[commands]]
+name = "add"
+description = "Add a pack to the city's imports (URL or local path)"
+script = "commands/add.py"
+
+[[commands]]
+name = "remove"
+description = "Remove a pack from imports and prune transitive deps"
+script = "commands/remove.py"
+
+[[commands]]
+name = "install"
+description = "Restore the city to the exact state in pack.lock"
+script = "commands/install.py"
+
+[[commands]]
+name = "upgrade"
+description = "Re-resolve constraints and bump pack.lock"
+script = "commands/upgrade.py"
+
+[[commands]]
+name = "list"
+description = "Show what this city imports (use --tree for the dependency graph)"
+script = "commands/list.py"
+
+[[commands]]
+name = "freeze"
+description = "Snapshot a pack into ./packs/<name>/ — seal it in amber"
+script = "commands/freeze.py"
+
+[[doctor]]
+name = "python3.11"
+description = "Verify Python 3.11+ is available (gc import uses tomllib from stdlib)"
+script = "doctor/check-python.sh"
