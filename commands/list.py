@@ -66,30 +66,43 @@ def _print_flat(lf, m) -> int:
 
 
 def _print_tree(lf, m) -> int:
-    # Build parent → children map
+    # Build parent → children map.
+    # The "(implicit)" parent value is treated as a synthetic root,
+    # not as a real handle to look up in lf.packs.
     children: dict[str, list[str]] = {}
+    implicit_roots: list[str] = []
+    real_roots: list[str] = []
     for h, p in lf.packs.items():
-        children.setdefault(p.parent or "", []).append(h)
+        if p.parent == "(implicit)":
+            implicit_roots.append(h)
+        elif p.parent:
+            children.setdefault(p.parent, []).append(h)
+        else:
+            real_roots.append(h)
     for k in children:
         children[k].sort()
+    real_roots.sort()
+    implicit_roots.sort()
 
-    # Direct (root) entries are those with no parent
-    roots = sorted(children.get("", []))
-
-    def walk(handle: str, prefix: str = "", is_last: bool = True):
+    def walk(handle: str, prefix: str = "", is_last: bool = True, suffix: str = ""):
         p = lf.packs[handle]
         marker = ""
         if p.frozen:
             marker = " (frozen)"
         connector = "└── " if is_last else "├── "
-        print(f"{prefix}{connector}{handle} {p.version} ({p.constraint}){marker}  — {_short_url(p.url)}")
+        print(f"{prefix}{connector}{handle} {p.version} ({p.constraint}){marker}{suffix}  — {_short_url(p.url)}")
         kids = children.get(handle, [])
         for i, kid in enumerate(kids):
             extension = "    " if is_last else "│   "
             walk(kid, prefix + extension, i == len(kids) - 1)
 
-    for i, root in enumerate(roots):
-        walk(root, "", i == len(roots) - 1)
+    # Direct city imports first
+    for i, root in enumerate(real_roots):
+        walk(root, "", i == len(real_roots) - 1)
+
+    # Then implicit roots, marked
+    for i, root in enumerate(implicit_roots):
+        walk(root, "", i == len(implicit_roots) - 1, suffix=" (implicit)")
 
     # Path imports
     for handle in sorted(m.imports.keys()):

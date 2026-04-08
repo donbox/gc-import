@@ -214,3 +214,52 @@ def pending_from_manifest(manifest) -> list[_PendingImport]:
             parent=None,
         ))
     return out
+
+
+def load_with_implicit(city_toml_path: Path) -> tuple:
+    """Read the city's [imports] and splice in the implicit list.
+
+    Returns a tuple (merged_manifest, implicit_handles), where:
+    - merged_manifest is a Manifest containing the city's [imports]
+      plus any implicit entries that didn't collide with city handles.
+      City wins on collision.
+    - implicit_handles is the set of handles that came from the
+      implicit list (and were not shadowed by a city import). The
+      caller uses this set to mark lock-file entries with
+      parent = "(implicit)" so gc import list can show the marker.
+
+    Honors implicit_imports = false at the top level of city.toml as
+    the per-city opt-out.
+    """
+    from . import manifest
+    from . import implicit
+
+    city_manifest = manifest.read(city_toml_path)
+    opt_out = implicit.read_opt_out_flag(city_toml_path)
+
+    if opt_out:
+        # No splice. Empty implicit-handles set.
+        return city_manifest, set()
+
+    # Splice. Compute the merged set, then figure out which handles
+    # actually came from the implicit list (i.e. weren't already in
+    # the city's own imports).
+    implicit.ensure_default_file()
+    implicit_imports = implicit.read_implicit_imports()
+
+    merged = manifest.Manifest()
+    # Start with implicit, overlay city — city wins on collision.
+    for handle, spec in implicit_imports.items():
+        merged.imports[handle] = spec
+    for handle, spec in city_manifest.imports.items():
+        merged.imports[handle] = spec
+
+    # implicit_handles = the set of handles that came from the implicit
+    # list AND were not shadowed by a city import. (A handle that's in
+    # both should be marked as a city import in the lock, not implicit.)
+    implicit_handles = {
+        h for h in implicit_imports
+        if h not in city_manifest.imports
+    }
+
+    return merged, implicit_handles

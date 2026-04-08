@@ -28,13 +28,32 @@ def main(argv: list[str]) -> int:
     city_root = ui.find_city_root()
     city_toml_path = city_root / "city.toml"
     m = manifest.read(city_toml_path)
-    if not m.imports:
+
+    # Splice in the implicit-imports list (e.g. maintenance) so the
+    # resolver upgrades them too. Honors implicit_imports = false.
+    from lib import implicit as implicit_lib
+    opt_out = implicit_lib.read_opt_out_flag(city_toml_path)
+    if opt_out:
+        implicit_imports = {}
+    else:
+        implicit_lib.ensure_default_file()
+        implicit_imports = implicit_lib.read_implicit_imports()
+
+    spliced = manifest.Manifest()
+    for h, s in implicit_imports.items():
+        spliced.imports[h] = s
+    for h, s in m.imports.items():
+        spliced.imports[h] = s
+    implicit_handles = {h for h in implicit_imports if h not in m.imports}
+
+    if not spliced.imports:
         ui.info("No imports to upgrade.")
         return 0
 
-    # If a specific name is requested, validate
-    if args.name and args.name not in m.imports:
-        ui.die(f"no import named {args.name!r} in [imports] in city.toml")
+    # If a specific name is requested, validate. Allow upgrading
+    # implicit handles by name as well as city imports.
+    if args.name and args.name not in spliced.imports:
+        ui.die(f"no import named {args.name!r} in [imports] in city.toml or in the implicit list")
 
     lf = lockfile.read(city_root / "pack.lock")
     accelerator = cache.user_accelerator_root()
@@ -47,7 +66,7 @@ def main(argv: list[str]) -> int:
     else:
         ui.info(f"Upgrading all imports...")
 
-    direct = resolver.pending_from_manifest(m)
+    direct = resolver.pending_from_manifest(spliced)
     try:
         new_closure = resolver.resolve(direct, accelerator)
     except resolver.ResolveError as e:
@@ -75,6 +94,10 @@ def main(argv: list[str]) -> int:
         target = pack_cache_root / h
         gitlib.materialize(rp.accelerator_path, target, subpath=rp.subpath)
         content_hash = cache.hash_directory(target)
+        # Mark implicit-origin entries with parent = "(implicit)".
+        parent = rp.parent
+        if parent is None and h in implicit_handles:
+            parent = "(implicit)"
         lf.packs[h] = lockfile.LockedPack(
             handle=h,
             url=rp.url,
@@ -82,7 +105,7 @@ def main(argv: list[str]) -> int:
             constraint=rp.constraint,
             commit=rp.commit,
             hash=content_hash,
-            parent=rp.parent,
+            parent=parent,
             frozen=False,
             subpath=rp.subpath,
         )

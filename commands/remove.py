@@ -32,6 +32,17 @@ def main(argv: list[str]) -> int:
 
     m = manifest.read(city_toml_path)
 
+    # Refuse to remove implicit-list handles. They aren't in [imports]
+    # to drop, and the user-facing way to disable them is the per-city
+    # implicit_imports = false flag, not gc import remove.
+    from lib import implicit as implicit_lib
+    if implicit_lib.is_implicit_handle(handle) and handle not in m.imports:
+        ui.die(
+            f"{handle!r} is an implicit import (every city gets it automatically). "
+            f"It's not in city.toml's [imports] to remove. To disable implicit imports "
+            f"in this city, set `implicit_imports = false` at the top of city.toml."
+        )
+
     if handle not in m.imports:
         ui.die(f"no import named {handle!r} in [imports] in city.toml")
 
@@ -56,10 +67,28 @@ def main(argv: list[str]) -> int:
     # Drop from manifest
     del m.imports[handle]
 
-    # Compute the new closure (everything reachable from remaining imports)
-    # — anything in the lock that's no longer reachable is GC'd
+    # Splice in the implicit-imports list so the resolver still sees
+    # them and they don't get GC'd from the lock when an unrelated
+    # city import is removed.
+    opt_out = implicit_lib.read_opt_out_flag(city_toml_path)
+    if opt_out:
+        implicit_imports_dict = {}
+    else:
+        implicit_lib.ensure_default_file()
+        implicit_imports_dict = implicit_lib.read_implicit_imports()
+
+    spliced = manifest.Manifest()
+    for h, s in implicit_imports_dict.items():
+        spliced.imports[h] = s
+    for h, s in m.imports.items():
+        spliced.imports[h] = s
+    implicit_handles = {h for h in implicit_imports_dict if h not in m.imports}
+
+    # Compute the new closure (everything reachable from remaining imports
+    # plus the implicit list) — anything in the lock that's no longer
+    # reachable is GC'd
     from lib import resolver
-    direct = resolver.pending_from_manifest(m)
+    direct = resolver.pending_from_manifest(spliced)
     accelerator = cache.user_accelerator_root()
     accelerator.mkdir(parents=True, exist_ok=True)
     try:
@@ -90,6 +119,10 @@ def main(argv: list[str]) -> int:
             from lib import git as gitlib
             gitlib.materialize(rp.accelerator_path, target, subpath=rp.subpath)
         content_hash = cache.hash_directory(target)
+        # Mark implicit-origin entries with parent = "(implicit)".
+        parent = rp.parent
+        if parent is None and h in implicit_handles:
+            parent = "(implicit)"
         lf.packs[h] = lockfile.LockedPack(
             handle=h,
             url=rp.url,
@@ -97,7 +130,7 @@ def main(argv: list[str]) -> int:
             constraint=rp.constraint,
             commit=rp.commit,
             hash=content_hash,
-            parent=rp.parent,
+            parent=parent,
             frozen=False,
             subpath=rp.subpath,
         )

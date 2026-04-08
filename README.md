@@ -2,7 +2,7 @@
 
 A URL-based package manager for Gas City packs.
 
-`gc import` is the answer to "how do I add a pack to my city without hand-editing TOML?" It handles git URL identity, semver constraints, transitive dependency resolution, lock files, and vendoring — in six verbs and zero third-party Python dependencies.
+`gc import` is the answer to "how do I add a pack to my city without hand-editing TOML?" It handles git URL identity, semver constraints, transitive dependency resolution, lock files, and a small implicit-imports baseline — in five verbs and zero third-party Python dependencies.
 
 ```
 $ gc import add https://github.com/example/gastown
@@ -21,19 +21,17 @@ That's the whole experience. One command, full transitive resolution, ready to r
 
 - [Installation](#installation)
 - [Quick start](#quick-start)
-- [The six verbs](#the-six-verbs)
+- [The five verbs](#the-five-verbs)
   - [`gc import add`](#gc-import-add)
   - [`gc import remove`](#gc-import-remove)
   - [`gc import install`](#gc-import-install)
   - [`gc import upgrade`](#gc-import-upgrade)
   - [`gc import list`](#gc-import-list)
-  - [`gc import freeze`](#gc-import-freeze)
 - [Concepts](#concepts)
   - [Imports vs locks vs caches](#imports-vs-locks-vs-caches)
   - [Local handles vs URLs](#local-handles-vs-urls)
   - [Transitive resolution](#transitive-resolution)
-  - [The `packs/` directory](#the-packs-directory)
-  - [Vendoring with freeze](#vendoring-with-freeze)
+  - [Implicit imports (the maintenance pack)](#implicit-imports-the-maintenance-pack)
 - [Common workflows](#common-workflows)
 - [Multi-pack monorepos](#multi-pack-monorepos)
 - [Side-by-side versions](#side-by-side-versions)
@@ -107,7 +105,7 @@ Installing from pack.lock (2 entries)...
 
 That's the entire onboarding flow. There is no `gc import init`, no `gc import register`, no setup file to edit. The first `add` does everything that needs to happen.
 
-## The six verbs
+## The five verbs
 
 ### `gc import add`
 
@@ -142,14 +140,14 @@ Remove a pack from the city's imports. Garbage-collects transitive deps that are
 gc import remove <name>
 ```
 
-Errors if the pack is currently frozen — run `rm -rf packs/<name>/` (or wait for `gc import thaw` if you want a verb) before removing.
-
 ```
 $ gc import remove gastown
 Removed [imports.gastown] from city.toml
 Garbage-collected transitive deps: polecat
 Updated city.toml, pack.lock
 ```
+
+Implicit imports (the maintenance pack and anything else in `~/.gc/implicit-import.toml`) cannot be removed via `gc import remove` — they aren't in `[imports]` to drop. To opt out of implicit imports for a city, set `implicit_imports = false` at the top of that city's `city.toml`. See [Implicit imports (the maintenance pack)](#implicit-imports-the-maintenance-pack) below.
 
 ### `gc import install`
 
@@ -159,14 +157,16 @@ Restore the city to the exact state recorded in `pack.lock`. The cold-clone / CI
 gc import install
 ```
 
-Reads `pack.lock`, fetches each entry from its recorded URL at its recorded commit, materializes into `.gc/cache/packs/`, and verifies content hashes. Does **not** modify `city.toml` or `pack.lock`. Pure restore.
+In the common case, reads `pack.lock`, fetches each entry from its recorded URL at its recorded commit, materializes into `.gc/cache/packs/`, and verifies content hashes. Pure restore: does not modify `city.toml` or `pack.lock`.
 
 ```
 $ gc import install
 Installing from pack.lock (2 entries)...
   gastown v1.4.0 ✓
-  polecat v0.4.1 ✓
+  polecat v0.4.1 ✓ (implicit)
 ```
+
+If `pack.lock` doesn't exist, OR is missing entries that the resolver would compute (e.g. you ran `gc init` and never invoked `gc import add` directly, so the lock has no entries but the implicit list still wants to bring in the maintenance pack), `install` self-heals by doing a full resolve and writing a fresh lock. This is the load-bearing trigger that makes implicit imports work for users who never type `gc import add`.
 
 Uses the hidden download accelerator (`~/.gc/cache/repos/`) so two cities pinning the same commit share one clone.
 
@@ -188,7 +188,7 @@ Upgrading gastown...
 Updated city.toml [packs] entries and pack.lock
 ```
 
-Frozen packs are skipped with an error.
+Implicit imports are upgraded along with everything else; you can also `gc import upgrade <implicit-handle>` to bump just the maintenance pack.
 
 ### `gc import list`
 
@@ -203,38 +203,16 @@ Default: a flat table of every pack in `pack.lock` (direct + transitive), one ro
 
 ```
 $ gc import list
-NAME     VERSION  CONSTRAINT  URL
-gastown  1.4.0    ^1.4        https://github.com/example/gastown
-polecat  0.4.1    ^0.4        https://github.com/example/polecat ← gastown
+NAME         VERSION  CONSTRAINT  URL
+gastown      1.4.0    ^1.4        https://github.com/example/gastown
+polecat      0.4.1    ^0.4        https://github.com/example/polecat ← gastown
+maintenance  1.5.0    ^1          https://github.com/gastownhall/maintenance ← (implicit)
 
 $ gc import list --tree
 └── gastown 1.4.0 (^1.4)  — https://github.com/example/gastown
     └── polecat 0.4.1 (^0.4)  — https://github.com/example/polecat
+└── maintenance 1.5.0 (^1) (implicit)  — https://github.com/gastownhall/maintenance
 ```
-
-### `gc import freeze` *(experimental)*
-
-> **⚠️ Experimental.** `gc import freeze` and the `./packs/` directory it writes into are experimental in v1 and may be removed before v1.0. The decision (keep, remove, or reframe in terms of the local registry) is pending a design discussion with Donna, Chris, and Julian. **Tracking issue:** TBD — to be filed against this repo once it's pushed to GitHub. Use freeze if you need it; expect the verb may go away or change shape.
-
-Snapshot the current resolution of an import into `./packs/<name>/`. Once frozen, the pack is committed to the city's git history and immune to upstream changes — sealed in amber.
-
-```
-gc import freeze <name>
-```
-
-Works for both URL imports (copies from `.gc/cache/packs/<name>/`) and path imports (copies from the path's contents at freeze time). The original source can change, disappear, or be edited without affecting this city.
-
-```
-$ gc import freeze gastown
-Freezing gastown v1.4.0 → ./packs/gastown/
-  Copied .gc/cache/packs/gastown/ → ./packs/gastown/
-  Swapped "gastown" → "./packs/gastown" in [workspace].includes
-  Removed [packs.gastown] from city.toml
-  Marked frozen = true in pack.lock
-To unfreeze: rm -rf ./packs/gastown/ && gc import install
-```
-
-**There is no `gc import thaw` verb.** Unfreezing is `rm -rf packs/<name>/` followed by `gc import install`. The pack.lock entry remembers the original URL/version/commit so install can fully reconstruct.
 
 ## Concepts
 
@@ -277,29 +255,36 @@ If two transitive constraints on the same URL meet, the resolver:
 - **Same major** → unifies to the highest version satisfying both. polecat 1.2.3 and 1.5.0 → 1.5.0.
 - **Different majors** → errors with a clear remediation hint asking you to disambiguate with explicit handles. The resolver never auto-suffixes.
 
-### The `packs/` directory
+### Implicit imports (the maintenance pack)
 
-> **⚠️ Experimental:** Both `./packs/` and `gc import freeze` are experimental in v1. They may be removed before v1.0 — see [Vendoring with freeze](#vendoring-with-freeze) for the full caveat.
+Every city automatically imports a small baseline set of packs, regardless of what's in `[imports]`. **In v1 the baseline is exactly one pack: `maintenance`.** A user who runs `gc init my-city && gc start` and never touches `gc import` still ends up with a working maintenance pack.
 
-`./packs/` in a city has two roles, and they're distinguished by the `[imports]` entry in `city.toml`, not by directory structure:
+The mental model: think of implicit imports as `[imports.X]` blocks that have been lexically prepended to your `[imports]` section by the package manager. They go through the same resolver, end up in the same `pack.lock`, materialize into the same `.gc/cache/packs/`, and show up in `gc import list` — they just aren't *visible* in your `city.toml`'s `[imports]` section, because they're not your direct intent.
 
-- **Hand-authored sub-packs.** You created them with `mkdir packs/helper && edit pack.toml`, and you reference them via `[imports.helper] path = "./packs/helper"` in `city.toml`. The package manager doesn't create or destroy these.
-- **Frozen imports.** Created by `gc import freeze gastown` (copy a resolved pack into `./packs/gastown/`). The lock file remembers `frozen = true` plus the original URL/version/commit/hash.
+You'll see them tagged `(implicit)` in `gc import list`:
 
-Both kinds coexist in the same directory with no conflict. They're committed to git either way.
+```
+NAME         VERSION  CONSTRAINT  URL                                              PARENT
+gastown      1.4.0    ^1.4        https://github.com/example/gastown               —
+maintenance  1.5.0    ^1          https://github.com/gastownhall/maintenance       ← (implicit)
+```
 
-### Vendoring with freeze
+And tagged `parent = "(implicit)"` in `pack.lock`. That `parent` field is what `gc import remove` checks when you try to remove an implicit handle:
 
-Freeze answers the question "how do I make sure this pack never changes out from under me, even if the upstream repo disappears?" It snapshots the pack into the city's source tree and commits it. From that moment forward, the pack is part of the city's git history.
+```
+$ gc import remove maintenance
+error: 'maintenance' is an implicit import (every city gets it automatically). It's
+not in city.toml's [imports] to remove. To disable implicit imports in this city,
+set `implicit_imports = false` at the top of city.toml.
+```
 
-The mental model: **freeze seals a pack in amber.** Whatever was resolved at freeze time becomes frozen, immutable, and immune to upstream changes. The lock file remembers the original URL so unfreezing is reversible.
+**Three knobs**, all in your city's `city.toml`:
 
-Use freeze when:
+- **Default** (do nothing): every city gets the implicit baseline.
+- **Opt-out**: set `implicit_imports = false` at the top of `city.toml`. The resolver skips the implicit list entirely; the maintenance pack is not fetched, locked, or materialized. Use this for embedded / minimal / specialized cities.
+- **Override**: add an explicit `[imports.maintenance]` block to your `city.toml` pointing at a different URL or version. The merge rule (city wins on collision) means your version wins and the implicit one is silently dropped. No auto-suffixing, no parallel installs.
 
-- You need a hermetic, fully-reproducible build (CI, archival, "must build in 10 years").
-- You're testing a local edit on top of an imported pack and want the change to survive upgrades.
-- You're worried about the upstream repo disappearing or being force-pushed.
-- You need to ship a city to an airgapped environment.
+**Where the implicit list lives**: `~/.gc/implicit-import.toml`. This file is set by `gc-import` on first run and is not user-facing configuration — there are no commands to manage it, and the expected state is "the file exists with whatever we shipped, and nobody touches it." Think of it less like `~/.bashrc` and more like a vendor-installed config under `/etc/`. If you need a different maintenance pack (a fork, an internal version, a pinned older version), the user-facing way to do that is to add an explicit `[imports.maintenance]` block to your `city.toml`, not to edit the implicit file.
 
 ## Common workflows
 
@@ -348,21 +333,6 @@ gastown: 1.5.0 → 2.0.0
 ```
 $ gc import add ../my-pack       # writes [imports.my-pack] path = "../my-pack"
 # Edit ../my-pack — changes are picked up immediately, no install needed
-```
-
-### Freezing for a hermetic build
-
-```
-$ gc import freeze gastown
-$ git add packs/gastown/ pack.lock city.toml
-$ git commit -m "Vendor gastown for reproducibility"
-```
-
-### Unfreezing
-
-```
-$ rm -rf packs/gastown/
-$ gc import install        # repopulates .gc/cache/packs/gastown/ from the lock
 ```
 
 ### Removing a pack
@@ -471,13 +441,6 @@ Run `gc import upgrade <name>` to re-resolve and refresh the hash, or `gc import
 
 See [Case 2](#case-2-within-city-transitive-conflict) above. Add explicit `[imports.X_v1]` and `[imports.X_v2]` blocks to coexist them.
 
-### "<name> is currently frozen"
-
-You tried to `remove`, `upgrade`, or re-`add` a pack that's been vendored into `./packs/<name>/`. Either:
-
-- Run `rm -rf packs/<name>/` (and re-run `gc import install` if you want the cache refreshed) to unfreeze it.
-- Or do whatever operation you need *without* touching the frozen pack.
-
 ### "not in a Gas City — no city.toml found"
 
 `gc import` walks up from the current working directory looking for the nearest `city.toml`. Make sure you're inside a city directory (or one of its subdirectories).
@@ -504,6 +467,25 @@ For the curious, here's the machinery.
 `~/.gc/cache/repos/<sha256(url+commit)>/` is a per-(URL, commit) git clone, populated as a side effect of `gc import add`/`upgrade`/`install`. It is never user-visible — there are no commands to inspect or manipulate it. Wiping `~/.gc/cache/` costs nothing except the next fetch being slower. This is the Go modules model.
 
 Two cities pinning the same commit share one clone. Two cities pinning different commits get two clones. Within a single city, only the *latest* relevant commit is fetched (the lock file determines what install needs).
+
+### The implicit-imports splice
+
+Before `add` / `install` / `upgrade` hands its imports to the resolver, it does a small dict merge:
+
+```
+spliced = read implicit imports from ~/.gc/implicit-import.toml
+spliced.merge(city's [imports])     # city wins on collision
+implicit_handles = {h for h in implicit if h not in city imports}
+hand spliced to the resolver
+```
+
+After the resolver returns a closure, the lock-writer marks any closure entry whose handle is in `implicit_handles` (and which has no transitive parent of its own) with `parent = "(implicit)"`. That marker is what `gc import list` reads to display the `(implicit)` tag and what `gc import remove` reads to refuse removal.
+
+The splice runs once per resolver invocation, costs nothing perceptible, and is bypassed entirely if the city has `implicit_imports = false` set at the top of its `city.toml`.
+
+### `gc import install` self-heals
+
+`gc import install` checks whether the city's `pack.lock` already accounts for the city's `[imports]` plus the implicit list. If yes, it does the pure-restore path (read lock, fetch each entry, materialize, verify hash). If no — pack.lock is missing entries the resolver would compute — it falls through to a full resolve + lock + materialize + city.toml mirror. This is the load-bearing trigger that makes implicit imports work for users who never type `gc import add` directly: a fresh `gc init` followed by `gc start` triggers an `install` which detects the missing maintenance entry and self-heals.
 
 ### The resolution algorithm
 
@@ -562,10 +544,9 @@ gc-import/
 ├── commands/
 │   ├── add.py                  # gc import add
 │   ├── remove.py               # gc import remove
-│   ├── install.py              # gc import install
+│   ├── install.py              # gc import install (and the self-healing first-run path)
 │   ├── upgrade.py              # gc import upgrade
-│   ├── list.py                 # gc import list
-│   └── freeze.py               # gc import freeze
+│   └── list.py                 # gc import list
 └── lib/
     ├── semver.py               # constraint parsing and matching
     ├── git.py                  # subprocess wrappers around git
@@ -573,6 +554,7 @@ gc-import/
     ├── manifest.py             # [imports] section read from city.toml
     ├── citytoml.py             # surgical edits to city.toml
     ├── cache.py                # cache management
+    ├── implicit.py             # ~/.gc/implicit-import.toml splice
     ├── resolver.py             # transitive resolution
     └── ui.py                   # consistent output formatting
 ```

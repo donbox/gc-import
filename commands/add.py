@@ -91,7 +91,29 @@ def main(argv: list[str]) -> int:
     m.imports[handle] = spec
 
     ui.info(f"Resolving {args.target}...")
-    direct = resolver.pending_from_manifest(m)
+
+    # Splice in the implicit-imports list so the resolver sees both
+    # the city's direct imports and the implicit baseline (e.g.
+    # maintenance). Honors implicit_imports = false in city.toml.
+    # Build a temporary manifest for resolution; the original 'm' is
+    # what gets written back to city.toml so the user sees only their
+    # direct imports there.
+    from lib import implicit as implicit_lib
+    opt_out = implicit_lib.read_opt_out_flag(city_toml_path)
+    if opt_out:
+        implicit_imports = {}
+    else:
+        implicit_lib.ensure_default_file()
+        implicit_imports = implicit_lib.read_implicit_imports()
+
+    spliced = manifest.Manifest()
+    for h, s in implicit_imports.items():
+        spliced.imports[h] = s
+    for h, s in m.imports.items():
+        spliced.imports[h] = s  # city wins on collision
+    implicit_handles = {h for h in implicit_imports if h not in m.imports}
+
+    direct = resolver.pending_from_manifest(spliced)
     accelerator = cache.user_accelerator_root()
     accelerator.mkdir(parents=True, exist_ok=True)
 
@@ -132,6 +154,13 @@ def main(argv: list[str]) -> int:
             continue
         target = pack_cache_root / h
         content_hash = cache.hash_directory(target)
+        # Mark implicit-origin entries with parent = "(implicit)" so
+        # gc import list and gc import remove can recognize them.
+        # A handle that's in the implicit set AND has no transitive
+        # parent is a top-level implicit import.
+        parent = rp.parent
+        if parent is None and h in implicit_handles:
+            parent = "(implicit)"
         lf.packs[h] = lockfile.LockedPack(
             handle=h,
             url=rp.url,
@@ -139,7 +168,7 @@ def main(argv: list[str]) -> int:
             constraint=rp.constraint,
             commit=rp.commit,
             hash=content_hash,
-            parent=rp.parent,
+            parent=parent,
             frozen=False,
             subpath=rp.subpath,
         )
