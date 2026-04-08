@@ -6,8 +6,8 @@ The user-facing manifest of direct imports lives inline in city.toml as:
     url = "https://github.com/example/gastown"
     version = "^1.2"
 
-    [imports.local]
-    path = "./packs/local"
+    [imports.helper]
+    path = "../helper"
 
 This is the v1 schema. In v2, the same syntax moves to pack.toml at the
 city root. The package manager owns the [imports] section but does not own

@@ -9,8 +9,8 @@ Format:
     constraint = "^1.2"
     commit = "abc123..."
     hash = "sha256:..."
-    parent = "gastown"      # optional, present iff transitive
-    frozen = true           # optional, present iff vendored into ./packs/
+    parent = "gastown"      # optional; either a parent handle (transitive)
+                            # or "(implicit)" for entries from the implicit list
     subpath = "foo"         # optional, present iff URL has a subpath
 
 The reader uses tomllib (stdlib in 3.11+). The writer is hand-rolled
@@ -35,7 +35,6 @@ class LockedPack:
     commit: str
     hash: str
     parent: Optional[str] = None
-    frozen: bool = False
     subpath: str = ""
 
 
@@ -73,7 +72,6 @@ def read(path: Path) -> Lockfile:
             commit=entry["commit"],
             hash=entry.get("hash", ""),
             parent=entry.get("parent"),
-            frozen=entry.get("frozen", False),
             subpath=entry.get("subpath", ""),
         )
     return lf
@@ -98,8 +96,6 @@ def write(lf: Lockfile, path: Path) -> None:
             lines.append(f'hash = "{p.hash}"')
         if p.parent:
             lines.append(f'parent = "{p.parent}"')
-        if p.frozen:
-            lines.append("frozen = true")
         if p.subpath:
             lines.append(f'subpath = "{p.subpath}"')
         lines.append("")

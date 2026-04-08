@@ -39,9 +39,7 @@ def _print_flat(lf, m) -> int:
     for handle in sorted(lf.packs.keys()):
         p = lf.packs[handle]
         marker = ""
-        if p.frozen:
-            marker = " (frozen)"
-        elif p.parent:
+        if p.parent:
             marker = f" ← {p.parent}"
         rows.append((handle, p.version, p.constraint, _short_url(p.url), marker))
 
@@ -86,11 +84,8 @@ def _print_tree(lf, m) -> int:
 
     def walk(handle: str, prefix: str = "", is_last: bool = True, suffix: str = ""):
         p = lf.packs[handle]
-        marker = ""
-        if p.frozen:
-            marker = " (frozen)"
         connector = "└── " if is_last else "├── "
-        print(f"{prefix}{connector}{handle} {p.version} ({p.constraint}){marker}{suffix}  — {_short_url(p.url)}")
+        print(f"{prefix}{connector}{handle} {p.version} ({p.constraint}){suffix}  — {_short_url(p.url)}")
         kids = children.get(handle, [])
         for i, kid in enumerate(kids):
             extension = "    " if is_last else "│   "

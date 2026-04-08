@@ -142,16 +142,12 @@ def main(argv: list[str]) -> int:
     lock_path = city_root / "pack.lock"
     lf = lockfile.read(lock_path)
     reachable = set(closure.keys())
-    # Garbage-collect old entries that are no longer reachable AND not frozen
+    # Garbage-collect old entries that are no longer reachable
     for h in list(lf.packs.keys()):
-        if h not in reachable and not lf.packs[h].frozen:
+        if h not in reachable:
             del lf.packs[h]
-    # Update lock from the closure, but preserve frozen state on existing entries
+    # Update lock from the closure
     for h, rp in closure.items():
-        existing = lf.packs.get(h)
-        if existing and existing.frozen:
-            # Frozen entries are sealed — don't touch them
-            continue
         target = pack_cache_root / h
         content_hash = cache.hash_directory(target)
         # Mark implicit-origin entries with parent = "(implicit)" so
@@ -169,7 +165,6 @@ def main(argv: list[str]) -> int:
             commit=rp.commit,
             hash=content_hash,
             parent=parent,
-            frozen=False,
             subpath=rp.subpath,
         )
     lockfile.write(lf, lock_path)
@@ -178,33 +173,19 @@ def main(argv: list[str]) -> int:
     city_data = citytoml.read(city_root / "city.toml")
     existing_includes = citytoml.get_includes(city_data)
 
-    # Build the new includes list:
-    #   - Preserve any user entries that aren't pack handles managed by us
-    #   - Add a handle for every reachable URL pack in the closure
-    #   - Frozen entries (from lockfile) are kept as-is
-    managed_handles = set(closure.keys()) | {h for h, p in lf.packs.items() if p.frozen}
-    user_includes = [
-        e for e in existing_includes
-        if e not in managed_handles and not any(e == f"./packs/{h}" for h in managed_handles)
-    ]
+    # Build the new includes list: preserve any user entries that aren't
+    # pack handles managed by us, then add a handle for every pack in
+    # the closure.
+    managed_handles = set(closure.keys())
+    user_includes = [e for e in existing_includes if e not in managed_handles]
     new_includes = list(user_includes)
-    frozen_handles = {h for h, p in lf.packs.items() if p.frozen}
     for h in sorted(closure.keys()):
-        if h in frozen_handles:
-            # Frozen handles use the path form
-            entry = f"./packs/{h}"
-        else:
-            entry = h
-        if entry not in new_includes:
-            new_includes.append(entry)
+        if h not in new_includes:
+            new_includes.append(h)
 
     from lib import git as gitlib
     new_packs = {}
     for h, rp in closure.items():
-        # Skip frozen entries — they don't get [packs.X] blocks (they're
-        # in [workspace].includes as ./packs/<h> instead).
-        if h in lf.packs and lf.packs[h].frozen:
-            continue
         # The v1 loader's PackSource expects a bare repo URL in `source`,
         # the git tag in `ref`, and an optional subpath in `path`.
         repo_url, _ = gitlib.split_url_and_subpath(rp.url)
@@ -216,10 +197,10 @@ def main(argv: list[str]) -> int:
             path=rp.subpath,
         )
 
-    # Anything previously in city.toml that's no longer in the closure (and not frozen)
+    # Anything previously in city.toml that's no longer in the closure
     # gets removed
     existing_packs = citytoml.get_packs(city_data)
-    to_remove = set(existing_packs.keys()) - set(new_packs.keys()) - {h for h, p in lf.packs.items() if p.frozen}
+    to_remove = set(existing_packs.keys()) - set(new_packs.keys())
 
     citytoml.update_includes_and_packs(
         city_root / "city.toml",

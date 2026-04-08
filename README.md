@@ -11,7 +11,8 @@ Resolving https://github.com/example/gastown...
   Recursing into [imports]:
     polecat → https://github.com/example/polecat
       Selected: 0.4.1 (constraint ^0.4)
-  Materialized → .gc/cache/packs/gastown/, .gc/cache/packs/polecat/
+  Materialized gastown v1.4.0 
+  Materialized polecat v0.4.1 (transitive: gastown)
   Updated city.toml ([imports], [packs], includes) and pack.lock (2 entries)
 ```
 
@@ -81,7 +82,8 @@ Resolving https://github.com/example/gastown...
   Recursing into [imports]:
     polecat → https://github.com/example/polecat
       Selected: 0.4.1 (constraint ^0.4)
-  Materialized → .gc/cache/packs/gastown/, .gc/cache/packs/polecat/
+  Materialized gastown v1.4.0 
+  Materialized polecat v0.4.1 (transitive: gastown)
   Updated city.toml ([imports], [packs], includes) and pack.lock (2 entries)
 
 # 3. See what you imported

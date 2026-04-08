@@ -9,7 +9,8 @@ Usage:
 - Removes the corresponding [packs.X] blocks from city.toml and entries
   from [workspace].includes.
 - Prunes the city pack cache for everything that was removed.
-- Errors with a thaw hint if the pack is currently frozen.
+- Refuses to remove implicit-list handles (set implicit_imports = false
+  in city.toml to disable implicit imports for this city).
 """
 
 import argparse
@@ -54,15 +55,9 @@ def main(argv: list[str]) -> int:
         ui.info(f"Removed [imports.{handle}] (path import) from city.toml")
         return 0
 
-    # URL import — check freeze state
+    # URL import — proceed
     lock_path = city_root / "pack.lock"
     lf = lockfile.read(lock_path)
-    locked = lf.get(handle)
-    if locked and locked.frozen:
-        ui.die(
-            f"{handle!r} is currently frozen in ./packs/{handle}/. "
-            f"Run `gc import thaw {handle}` first, then `gc import remove {handle}`."
-        )
 
     # Drop from manifest
     del m.imports[handle]
@@ -97,23 +92,19 @@ def main(argv: list[str]) -> int:
         ui.die(f"resolver error after removal: {e}")
 
     # Decide what to remove from the lock and from city.toml
-    keep_handles = set(new_closure.keys()) | {h for h, p in lf.packs.items() if p.frozen}
+    keep_handles = set(new_closure.keys())
     to_remove = set(lf.packs.keys()) - keep_handles
     to_remove.add(handle)  # explicitly remove the requested handle even if it stayed reachable somehow
 
     removed_from_lock = []
     for h in to_remove:
-        if h in lf.packs and not lf.packs[h].frozen:
+        if h in lf.packs:
             del lf.packs[h]
             cache.remove_pack_from_cache(city_root, h)
             removed_from_lock.append(h)
 
     # Update lock entries with the new closure (in case constraints/versions changed)
-    # Preserve frozen entries — they're sealed.
     for h, rp in new_closure.items():
-        existing = lf.packs.get(h)
-        if existing and existing.frozen:
-            continue
         target = cache.city_pack_cache(city_root) / h
         if not target.exists():
             from lib import git as gitlib
@@ -131,7 +122,6 @@ def main(argv: list[str]) -> int:
             commit=rp.commit,
             hash=content_hash,
             parent=parent,
-            frozen=False,
             subpath=rp.subpath,
         )
     lockfile.write(lf, lock_path)
@@ -140,29 +130,18 @@ def main(argv: list[str]) -> int:
     from lib import git as gitlib
     city_data = citytoml.read(city_root / "city.toml")
     existing_includes = citytoml.get_includes(city_data)
-    frozen_handles = {h for h, p in lf.packs.items() if p.frozen}
-    managed_handles = set(new_closure.keys()) | frozen_handles
+    managed_handles = set(new_closure.keys())
     user_includes = [
         e for e in existing_includes
-        if e not in managed_handles
-        and e not in to_remove
-        and not any(e == f"./packs/{h}" for h in to_remove)
-        and not any(e == f"./packs/{h}" for h in managed_handles)
+        if e not in managed_handles and e not in to_remove
     ]
     new_includes = list(user_includes)
     for h in sorted(new_closure.keys()):
-        if h in frozen_handles:
-            entry = f"./packs/{h}"
-        else:
-            entry = h
-        if entry not in new_includes:
-            new_includes.append(entry)
+        if h not in new_includes:
+            new_includes.append(h)
 
     new_packs = {}
     for h, rp in new_closure.items():
-        # Skip frozen — they don't get [packs.X] blocks
-        if h in frozen_handles:
-            continue
         repo_url, _ = gitlib.split_url_and_subpath(rp.url)
         ref = f"v{rp.version}" if rp.subpath == "" else f"{rp.subpath}/v{rp.version}"
         new_packs[h] = citytoml.PacksBlock(

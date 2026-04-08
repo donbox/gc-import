@@ -72,17 +72,10 @@ def main(argv: list[str]) -> int:
     except resolver.ResolveError as e:
         ui.die(str(e))
 
-    # Skip frozen entries — keep their lock entries unchanged
-    frozen_handles = {h for h, p in lf.packs.items() if p.frozen}
-    if args.name and args.name in frozen_handles:
-        ui.die(f"{args.name!r} is frozen — thaw first to upgrade")
-
     from lib import git as gitlib
 
     bumped = []
     for h, rp in new_closure.items():
-        if h in frozen_handles:
-            continue
         if args.name and h != args.name and not _is_descendant_of(h, args.name, new_closure):
             # Limited upgrade: only the named pack and its transitive descendants
             # Keep the existing entry
@@ -106,7 +99,6 @@ def main(argv: list[str]) -> int:
             commit=rp.commit,
             hash=content_hash,
             parent=parent,
-            frozen=False,
             subpath=rp.subpath,
         )
         if existing:

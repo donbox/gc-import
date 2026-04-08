@@ -181,7 +181,6 @@ def _full_install(city_root, city_toml_path, m, spliced, implicit_handles) -> in
             commit=rp.commit,
             hash=content_hash,
             parent=parent,
-            frozen=False,
             subpath=rp.subpath,
         )
     lockfile.write(lf, lock_path)
